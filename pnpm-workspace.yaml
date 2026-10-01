@@ -188,3 +188,6 @@ overrides:
   brace-expansion: "^2.1.4"
   # fast-uri <3.1.5 - host confusion vulnerability
   fast-uri: "^3.1.5"
+
+allowBuilds:
+  esbuild: true
