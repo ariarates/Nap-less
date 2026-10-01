@@ -11,7 +11,8 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Notifications from "expo-notifications";
 import * as Haptics from "expo-haptics";
 import { Audio } from "expo-av";
-import { Platform } from "react-native";
+import { AppState, Platform } from "react-native";
+import NativeAlarm from "@/modules/napless-alarm";
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -128,12 +129,16 @@ async function requestNotificationPermissions() {
 async function scheduleAlarmNotification(config: AlarmConfig): Promise<string | undefined> {
   if (Platform.OS === "web") return undefined;
   try {
-    const granted = await requestNotificationPermissions();
-    if (!granted) return undefined;
     const now = new Date();
     const alarm = new Date();
     alarm.setHours(config.hour, config.minute, 0, 0);
     if (alarm <= now) alarm.setDate(alarm.getDate() + 1);
+    if (Platform.OS === "android") {
+      await NativeAlarm.scheduleAlarm(alarm.getTime(), config.ringtoneUri ?? PRESET_RINGTONES[0].uri);
+      return undefined;
+    }
+    const granted = await requestNotificationPermissions();
+    if (!granted) return undefined;
     const id = await Notifications.scheduleNotificationAsync({
       content: {
         title: "Napless Alarm",
@@ -154,6 +159,10 @@ async function scheduleAlarmNotification(config: AlarmConfig): Promise<string | 
 }
 
 async function cancelNotification(id?: string) {
+  if (Platform.OS === "android") {
+    await NativeAlarm.cancelAlarm();
+    return;
+  }
   if (!id || Platform.OS === "web") return;
   try {
     await Notifications.cancelScheduledNotificationAsync(id);
@@ -183,7 +192,7 @@ function stopHapticAlarm() {
 }
 
 async function startAlarmSound(uri?: string) {
-  if (Platform.OS === "web") return;
+  if (Platform.OS !== "ios") return;
   try {
     await stopAlarmSound();
     await Audio.setAudioModeAsync({
@@ -222,6 +231,18 @@ export function AlarmProvider({ children }: { children: ReactNode }) {
     AsyncStorage.getItem(ALARM_KEY).then((data) => {
       if (data) setConfigState(JSON.parse(data));
     });
+  }, []);
+
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+    const syncRingingState = async () => {
+      if (await NativeAlarm.isRinging()) setIsRinging(true);
+    };
+    void syncRingingState();
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "active") void syncRingingState();
+    });
+    return () => sub.remove();
   }, []);
 
   useEffect(() => {
@@ -271,7 +292,8 @@ export function AlarmProvider({ children }: { children: ReactNode }) {
   const stopAlarm = useCallback(() => {
     setIsRinging(false);
     stopHapticAlarm();
-    stopAlarmSound();
+    if (Platform.OS === "android") void NativeAlarm.stopAlarm();
+    else void stopAlarmSound();
   }, []);
 
   const getChallenge = useCallback(() => {
