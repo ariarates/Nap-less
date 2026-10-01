@@ -119,7 +119,7 @@ export default function EmergencyScreen() {
             style={[styles.submitBtn, { backgroundColor: colors.warning }]}
             onPress={handleSubmit}
           >
-            <Ionicons name="unlock-outline" size={20} color="#fff" />
+            <Ionicons name="lock-open-outline" size={20} color="#fff" />
             <Text style={styles.submitText}>Bypass with Code</Text>
           </TouchableOpacity>
         </View>

@@ -184,7 +184,11 @@ overrides:
   tar: "^7.5.19"
   # @babel/core <=7.29.0 - GHSA-4x5r-pxfx-6jf8 (arbitrary file read via sourceMappingURL)
   "@babel/core": "^7.29.6"
-  # brace-expansion - GHSA advisories for 1.x and 2.x; 2.x is backwards compatible
-  brace-expansion: "^2.1.4"
+  # Keep CJS-compatible versions for minimatch used by Expo fingerprinting.
+  "brace-expansion@>=2.1.0 <3": "2.0.2"
+  "brace-expansion@>=5.0.6": "5.0.5"
   # fast-uri <3.1.5 - host confusion vulnerability
   fast-uri: "^3.1.5"
+
+allowBuilds:
+  esbuild: true

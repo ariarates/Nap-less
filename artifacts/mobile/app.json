@@ -25,10 +25,6 @@
       "versionCode": 1,
       "compileSdkVersion": 35,
       "targetSdkVersion": 35,
-      "adaptiveIcon": {
-        "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#080C14"
-      },
       "permissions": [
         "CAMERA",
         "VIBRATE",
