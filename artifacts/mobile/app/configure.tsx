@@ -1,9 +1,10 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { LinearGradient } from "expo-linear-gradient";
-import { router } from "expo-router";
-import React, { useState } from "react";
+import { router, useLocalSearchParams } from "expo-router";
+import React, { useEffect, useState } from "react";
 import {
+  Alert,
   Platform,
   ScrollView,
   StyleSheet,
@@ -15,7 +16,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { RingtonePicker } from "@/components/RingtonePicker";
-import { CHALLENGES, PRESET_RINGTONES, useAlarm } from "@/contexts/AlarmContext";
+import { AlarmConfig, AlarmRepeatMode, CHALLENGES, dateKey, PRESET_RINGTONES, useAlarm } from "@/contexts/AlarmContext";
 import { useColors } from "@/hooks/useColors";
 
 function pad(n: number) {
@@ -68,35 +69,102 @@ const spinStyles = StyleSheet.create({
 export default function ConfigureScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { config, setConfig } = useAlarm();
+  const { alarms, saveAlarm } = useAlarm();
+  const { id } = useLocalSearchParams<{ id?: string }>();
+  const editingAlarm = alarms.find((alarm) => alarm.id === id);
 
-  const [hour, setHour] = useState(config?.hour ?? 7);
-  const [minute, setMinute] = useState(config?.minute ?? 0);
-  const [challengeId, setChallengeId] = useState(config?.challengeId ?? CHALLENGES[0].id);
-  const [customChallenge, setCustomChallenge] = useState(config?.customChallenge ?? "");
-  const [ringtoneUri, setRingtoneUri] = useState(config?.ringtoneUri ?? PRESET_RINGTONES[0].uri);
-  const [ringtoneName, setRingtoneName] = useState(config?.ringtoneName ?? PRESET_RINGTONES[0].name);
+  const [hour, setHour] = useState(7);
+  const [minute, setMinute] = useState(0);
+  const [challengeId, setChallengeId] = useState(CHALLENGES[0].id);
+  const [customChallenge, setCustomChallenge] = useState("");
+  const [ringtoneUri, setRingtoneUri] = useState(PRESET_RINGTONES[0].uri);
+  const [ringtoneName, setRingtoneName] = useState(PRESET_RINGTONES[0].name);
+  const [repeatMode, setRepeatMode] = useState<AlarmRepeatMode>("daily");
+  const [weekdays, setWeekdays] = useState<number[]>([]);
+  const [monthDays, setMonthDays] = useState<number[]>([]);
+  const [dates, setDates] = useState<string[]>([]);
+  const [visibleMonth, setVisibleMonth] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
   const [showRingtonePicker, setShowRingtonePicker] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!editingAlarm) return;
+    setHour(editingAlarm.hour);
+    setMinute(editingAlarm.minute);
+    setChallengeId(editingAlarm.challengeId);
+    setCustomChallenge(editingAlarm.customChallenge ?? "");
+    setRingtoneUri(editingAlarm.ringtoneUri ?? PRESET_RINGTONES[0].uri);
+    setRingtoneName(editingAlarm.ringtoneName ?? PRESET_RINGTONES[0].name);
+    setRepeatMode(editingAlarm.repeatMode);
+    setWeekdays(editingAlarm.weekdays);
+    setMonthDays(editingAlarm.monthDays);
+    setDates(editingAlarm.dates);
+    if (editingAlarm.dates.length > 0) {
+      const [year, month] = editingAlarm.dates[0].split("-").map(Number);
+      setVisibleMonth(new Date(year, month - 1, 1));
+    }
+  }, [editingAlarm?.id]);
 
   const handleSave = async () => {
     if (saving) return;
     setSaving(true);
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    await setConfig({
-      enabled: true,
-      hour,
-      minute,
-      challengeId,
-      customChallenge: challengeId === "custom" ? customChallenge : undefined,
-      ringtoneUri,
-      ringtoneName,
-    });
-    router.back();
+    try {
+      if (repeatMode === "weekdays" && weekdays.length === 0) {
+        Alert.alert("Choose days", "Select at least one weekday for this alarm.");
+        return;
+      }
+      if (repeatMode === "dates" && dates.length === 0) {
+        Alert.alert("Choose dates", "Select at least one future date on the calendar.");
+        return;
+      }
+      if (repeatMode === "monthly" && monthDays.length === 0) {
+        Alert.alert("Choose days", "Select at least one day of the month on the calendar.");
+        return;
+      }
+      const config: AlarmConfig = {
+        id: editingAlarm?.id ?? `alarm-${Date.now()}`,
+        enabled: true,
+        hour,
+        minute,
+        challengeId,
+        repeatMode,
+        weekdays,
+        monthDays,
+        dates,
+        customChallenge: challengeId === "custom" ? customChallenge : undefined,
+        ringtoneUri,
+        ringtoneName,
+      };
+      await saveAlarm(config);
+      router.back();
+    } catch (error) {
+      const hasNoFutureOccurrence = error instanceof Error && error.message.includes("future");
+      Alert.alert(
+        "Couldn't set alarm",
+        hasNoFutureOccurrence
+          ? "Choose a future time or calendar date for this alarm."
+          : Platform.OS === "android"
+          ? "Check Nap-Less's Alarms & reminders permission in Android settings, then try again."
+          : "Check your notification permissions, then try again."
+      );
+    } finally {
+      setSaving(false);
+    }
   };
 
   const h12 = hour % 12 || 12;
   const ampm = hour < 12 ? "AM" : "PM";
+  const daysInMonth = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() + 1, 0).getDate();
+  const monthOffset = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth(), 1).getDay();
+  const calendarCells = Array.from({ length: 42 }, (_, index) => {
+    const day = index - monthOffset + 1;
+    return day > 0 && day <= daysInMonth ? day : null;
+  });
+  const todayKey = dateKey(new Date());
+  const latestDate = new Date();
+  latestDate.setDate(latestDate.getDate() + 370);
+  const latestKey = dateKey(latestDate);
 
   const ringtoneIcon =
     !ringtoneUri
@@ -110,7 +178,7 @@ export default function ConfigureScreen() {
           <TouchableOpacity onPress={() => router.back()}>
             <Ionicons name="arrow-back" size={24} color={colors.foreground} />
           </TouchableOpacity>
-          <Text style={[styles.title, { color: colors.foreground }]}>Set Alarm</Text>
+          <Text style={[styles.title, { color: colors.foreground }]}>{editingAlarm ? "Edit Alarm" : "New Alarm"}</Text>
           <View style={{ width: 24 }} />
         </View>
 
@@ -130,6 +198,91 @@ export default function ConfigureScreen() {
             <Text style={[styles.timePreview, { color: colors.mutedForeground }]}>
               Alarm will ring at {h12}:{pad(minute)} {ampm}
             </Text>
+          </View>
+
+          <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <Text style={[styles.sectionLabel, { color: colors.mutedForeground }]}>REPEAT</Text>
+            <View style={styles.repeatModes}>
+              {([
+                ["daily", "Every day"],
+                ["weekdays", "Weekdays"],
+                ["monthly", "Monthly"],
+                ["dates", "Selected dates"],
+              ] as [AlarmRepeatMode, string][]).map(([mode, label]) => (
+                <TouchableOpacity
+                  key={mode}
+                  onPress={() => setRepeatMode(mode)}
+                  style={[styles.repeatMode, { backgroundColor: repeatMode === mode ? colors.primary : colors.secondary, borderColor: repeatMode === mode ? colors.primary : colors.border }]}
+                >
+                  <Text style={[styles.repeatModeText, { color: repeatMode === mode ? colors.primaryForeground : colors.mutedForeground }]}>{label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            {repeatMode === "weekdays" && (
+              <View style={styles.weekdayRow}>
+                {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((label, day) => {
+                  const selected = weekdays.includes(day);
+                  return (
+                    <TouchableOpacity
+                      key={label}
+                      accessibilityRole="checkbox"
+                      accessibilityState={{ checked: selected }}
+                      onPress={() => setWeekdays(selected ? weekdays.filter((value) => value !== day) : [...weekdays, day].sort())}
+                      style={[styles.weekdayButton, { backgroundColor: selected ? colors.primary : colors.secondary, borderColor: selected ? colors.primary : colors.border }]}
+                    >
+                      <Text style={[styles.weekdayText, { color: selected ? colors.primaryForeground : colors.mutedForeground }]}>{label}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            )}
+            {(repeatMode === "monthly" || repeatMode === "dates") && (
+              <View style={styles.calendar}>
+                <View style={styles.calendarHeader}>
+                  <TouchableOpacity onPress={() => setVisibleMonth(new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() - 1, 1))}>
+                    <Ionicons name="chevron-back" size={20} color={colors.foreground} />
+                  </TouchableOpacity>
+                  <Text style={[styles.calendarMonth, { color: colors.foreground }]}>
+                    {visibleMonth.toLocaleDateString("en-US", { month: "long", year: "numeric" })}
+                  </Text>
+                  <TouchableOpacity onPress={() => setVisibleMonth(new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() + 1, 1))}>
+                    <Ionicons name="chevron-forward" size={20} color={colors.foreground} />
+                  </TouchableOpacity>
+                </View>
+                <View style={styles.calendarGrid}>
+                  {["S", "M", "T", "W", "T", "F", "S"].map((label, index) => (
+                    <Text key={`${label}-${index}`} style={[styles.calendarWeekday, { color: colors.mutedForeground }]}>{label}</Text>
+                  ))}
+                  {calendarCells.map((day, index) => {
+                    if (!day) return <View key={`empty-${index}`} style={styles.calendarCell} />;
+                    const key = dateKey(new Date(visibleMonth.getFullYear(), visibleMonth.getMonth(), day));
+                    const selected = repeatMode === "monthly" ? monthDays.includes(day) : dates.includes(key);
+                    const isOutsideRange = repeatMode === "dates" && (key < todayKey || key > latestKey);
+                    return (
+                      <TouchableOpacity
+                        key={key}
+                        disabled={isOutsideRange}
+                        onPress={() => {
+                          if (repeatMode === "monthly") {
+                            setMonthDays(selected ? monthDays.filter((value) => value !== day) : [...monthDays, day].sort((a, b) => a - b));
+                          } else {
+                            setDates(selected ? dates.filter((date) => date !== key) : [...dates, key].sort());
+                          }
+                        }}
+                        style={[styles.calendarCell, styles.calendarDate, { backgroundColor: selected ? colors.primary : "transparent", borderColor: selected ? colors.primary : "transparent", opacity: isOutsideRange ? 0.3 : 1 }]}
+                      >
+                        <Text style={[styles.calendarDateText, { color: selected ? colors.primaryForeground : colors.foreground }]}>{day}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+                <Text style={[styles.selectedDatesText, { color: colors.mutedForeground }]}>
+                  {repeatMode === "monthly"
+                    ? monthDays.length ? `${monthDays.length} day${monthDays.length === 1 ? "" : "s"} each month` : "Select one or more days each month"
+                    : dates.length ? `${dates.length} date${dates.length === 1 ? "" : "s"} selected` : "Select one or more future dates"}
+                </Text>
+              </View>
+            )}
           </View>
 
           <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -213,7 +366,7 @@ export default function ConfigureScreen() {
           >
             <Ionicons name="checkmark" size={22} color={colors.primaryForeground} />
             <Text style={[styles.saveBtnText, { color: colors.primaryForeground }]}>
-              {saving ? "Saving..." : "Save Alarm"}
+              {saving ? "Saving..." : editingAlarm ? "Save Changes" : "Add Alarm"}
             </Text>
           </TouchableOpacity>
         </View>
@@ -242,6 +395,21 @@ const styles = StyleSheet.create({
   section: { borderRadius: 18, borderWidth: 1, padding: 20, gap: 14 },
   sectionLabel: { fontSize: 11, fontFamily: "Inter_700Bold", letterSpacing: 1.5 },
   sectionDesc: { fontSize: 13, fontFamily: "Inter_400Regular", marginTop: -6 },
+  repeatModes: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
+  repeatMode: { width: "48%", minHeight: 40, borderWidth: 1, borderRadius: 9, alignItems: "center", justifyContent: "center", paddingHorizontal: 4 },
+  repeatModeText: { fontSize: 11, fontFamily: "Inter_600SemiBold", textAlign: "center" },
+  weekdayRow: { flexDirection: "row", justifyContent: "space-between", gap: 5 },
+  weekdayButton: { width: 40, height: 40, borderRadius: 20, borderWidth: 1, alignItems: "center", justifyContent: "center" },
+  weekdayText: { fontSize: 11, fontFamily: "Inter_600SemiBold" },
+  calendar: { gap: 12 },
+  calendarHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  calendarMonth: { fontSize: 15, fontFamily: "Inter_600SemiBold" },
+  calendarGrid: { flexDirection: "row", flexWrap: "wrap" },
+  calendarWeekday: { width: `${100 / 7}%`, textAlign: "center", fontSize: 11, fontFamily: "Inter_600SemiBold", paddingVertical: 8 },
+  calendarCell: { width: `${100 / 7}%`, aspectRatio: 1, alignItems: "center", justifyContent: "center" },
+  calendarDate: { borderWidth: 1, borderRadius: 22 },
+  calendarDateText: { fontSize: 13, fontFamily: "Inter_500Medium" },
+  selectedDatesText: { fontSize: 12, fontFamily: "Inter_400Regular" },
   timeRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 12 },
   colon: { fontSize: 48, fontFamily: "Inter_700Bold", lineHeight: 56 },
   ampmBox: { borderRadius: 12, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 10, marginLeft: 8 },

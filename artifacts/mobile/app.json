@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Napless",
+    "name": "Nap-Less",
     "slug": "mobile",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -16,8 +16,8 @@
     "ios": {
       "supportsTablet": false,
       "infoPlist": {
-        "NSCameraUsageDescription": "Napless uses your camera to register your face and verify wake-up challenges.",
-        "NSUserNotificationsUsageDescription": "Napless uses notifications to ring your alarm."
+        "NSCameraUsageDescription": "Nap-Less uses your camera to register your face and verify wake-up challenges.",
+        "NSUserNotificationsUsageDescription": "Nap-Less uses notifications to ring your alarm."
       }
     },
     "android": {
@@ -41,8 +41,8 @@
     },
     "web": {
       "favicon": "./assets/images/icon.png",
-      "name": "Napless",
-      "shortName": "Napless",
+      "name": "Nap-Less",
+      "shortName": "Nap-Less",
       "description": "Smart alarm clock with facial recognition and wake-up challenges. The alarm doesn't stop until you prove you're truly awake.",
       "lang": "en",
       "themeColor": "#080C14",

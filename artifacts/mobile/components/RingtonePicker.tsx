@@ -273,7 +273,7 @@ export function RingtonePicker({ visible, currentUri, currentName, onSelect, onC
                   <Ionicons name="musical-notes-outline" size={40} color={colors.mutedForeground} />
                   <Text style={[s.permTitle, { color: colors.foreground }]}>Access your music library</Text>
                   <Text style={[s.permDesc, { color: colors.mutedForeground }]}>
-                    Allow Napless to browse audio files stored on your device.
+                    Allow Nap-Less to browse audio files stored on your device.
                   </Text>
                   <TouchableOpacity
                     style={[s.permBtn, { backgroundColor: colors.primary }]}

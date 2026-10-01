@@ -1,10 +1,25 @@
-import { requireNativeModule } from "expo-modules-core";
+import { requireOptionalNativeModule } from "expo-modules-core";
 
 interface NaplessAlarmModule {
-  scheduleAlarm(timestamp: number, ringtoneUri: string): Promise<void>;
-  cancelAlarm(): Promise<void>;
+  scheduleAlarm(
+    alarmId: string,
+    timestamp: number,
+    ringtoneUri: string,
+    repeatMode: string,
+    weekdays: number[],
+    monthDays: number[],
+    dates: string[]
+  ): Promise<void>;
+  cancelAlarm(alarmId?: string): Promise<void>;
   stopAlarm(): Promise<void>;
-  isRinging(): Promise<boolean>;
+  getRingingAlarmId(): Promise<string | null>;
 }
 
-export default requireNativeModule<NaplessAlarmModule>("NaplessAlarm");
+const nativeModule = requireOptionalNativeModule<NaplessAlarmModule>("NaplessAlarm");
+
+export default nativeModule ?? {
+  scheduleAlarm: async () => undefined,
+  cancelAlarm: async () => undefined,
+  stopAlarm: async () => undefined,
+  getRingingAlarmId: async () => null,
+};

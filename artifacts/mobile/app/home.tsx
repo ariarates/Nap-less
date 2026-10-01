@@ -4,8 +4,10 @@ import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import React, { useEffect, useRef, useState } from "react";
 import {
+  Alert,
   Animated,
   Platform,
+  ScrollView,
   StyleSheet,
   Switch,
   Text,
@@ -14,7 +16,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { CHALLENGES, useAlarm } from "@/contexts/AlarmContext";
+import { AlarmConfig, useAlarm } from "@/contexts/AlarmContext";
 import { useFace } from "@/contexts/FaceContext";
 import { useColors } from "@/hooks/useColors";
 
@@ -28,10 +30,22 @@ function formatAlarmTime(hour: number, minute: number) {
   return `${h12}:${pad(minute)} ${ampm}`;
 }
 
+function formatRepeat(alarm: AlarmConfig) {
+  if (alarm.repeatMode === "daily") return "Every day";
+  if (alarm.repeatMode === "weekdays") {
+    return alarm.weekdays.map((day) => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][day]).join(" · ");
+  }
+  if (alarm.repeatMode === "monthly") return `Monthly · ${alarm.monthDays.join(", ")}`;
+  const selected = alarm.dates.slice(0, 3).map((date) =>
+    new Date(`${date}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+  );
+  return `${selected.join(", ")}${alarm.dates.length > 3 ? ` +${alarm.dates.length - 3}` : ""}`;
+}
+
 export default function HomeScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { config, setConfig, isRinging } = useAlarm();
+  const { alarms, setAlarmEnabled, deleteAlarm, isRinging } = useAlarm();
   const { clearFace } = useFace();
   const [now, setNow] = useState(new Date());
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -45,7 +59,7 @@ export default function HomeScreen() {
   }, []);
 
   useEffect(() => {
-    if (config?.enabled) {
+    if (alarms.some((alarm) => alarm.enabled)) {
       Animated.loop(
         Animated.sequence([
           Animated.timing(dotAnim, { toValue: 0.3, duration: 1000, useNativeDriver: true }),
@@ -53,7 +67,7 @@ export default function HomeScreen() {
         ])
       ).start();
     }
-  }, [config?.enabled]);
+  }, [alarms]);
 
   useEffect(() => {
     if (isRinging) {
@@ -67,19 +81,11 @@ export default function HomeScreen() {
   const h12 = hours % 12 || 12;
   const ampm = hours < 12 ? "AM" : "PM";
 
-  const challenge = config ? CHALLENGES.find((c) => c.id === config.challengeId) ?? CHALLENGES[0] : null;
-
-  const toggleAlarm = async () => {
-    if (!config) return;
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    await setConfig({ ...config, enabled: !config.enabled });
-  };
-
   return (
     <LinearGradient colors={["#080C14", "#0B1020", "#080C14"]} style={styles.fill}>
       <Animated.View style={[styles.container, { paddingTop: insets.top + (Platform.OS === "web" ? 67 : 16), opacity: fadeAnim }]}>
         <View style={styles.header}>
-          <Text style={[styles.appName, { color: colors.mutedForeground }]}>NAPLESS</Text>
+          <Text style={[styles.appName, { color: colors.mutedForeground }]}>NAP-LESS</Text>
           <TouchableOpacity
             style={[styles.settingsBtn, { borderColor: colors.border, backgroundColor: colors.card }]}
             onPress={() => router.push("/emergency")}
@@ -104,44 +110,53 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.alarmSection}>
-          {config ? (
-            <View style={[styles.alarmCard, { backgroundColor: colors.card, borderColor: config.enabled ? colors.primary + "40" : colors.border }]}>
-              <View style={styles.alarmCardTop}>
-                <View style={styles.alarmTimeRow}>
-                  <Ionicons name="alarm-outline" size={18} color={config.enabled ? colors.primary : colors.mutedForeground} />
-                  <Text style={[styles.alarmTime, { color: config.enabled ? colors.foreground : colors.mutedForeground }]}>
-                    {formatAlarmTime(config.hour, config.minute)}
-                  </Text>
+          <View style={styles.alarmHeading}>
+            <Text style={[styles.sectionTitle, { color: colors.foreground }]}>ALARMS</Text>
+            <Text style={[styles.alarmCount, { color: colors.mutedForeground }]}>{alarms.length}</Text>
+          </View>
+          {alarms.length > 0 ? (
+            <ScrollView style={styles.alarmList} contentContainerStyle={styles.alarmListContent} showsVerticalScrollIndicator>
+              {[...alarms].sort((a, b) => a.hour * 60 + a.minute - (b.hour * 60 + b.minute)).map((alarm) => (
+                <View key={alarm.id} style={[styles.alarmCard, { backgroundColor: colors.card, borderColor: alarm.enabled ? colors.primary + "40" : colors.border }]}>
+                  <View style={styles.alarmCardTop}>
+                    <View style={styles.alarmTimeRow}>
+                      <Ionicons name="alarm-outline" size={18} color={alarm.enabled ? colors.primary : colors.mutedForeground} />
+                      <Text style={[styles.alarmTime, { color: alarm.enabled ? colors.foreground : colors.mutedForeground }]}>
+                        {formatAlarmTime(alarm.hour, alarm.minute)}
+                      </Text>
+                    </View>
+                    <View style={styles.alarmActions}>
+                      <TouchableOpacity accessibilityLabel="Edit alarm" onPress={() => router.push({ pathname: "/configure", params: { id: alarm.id } })}>
+                        <Ionicons name="pencil-outline" size={18} color={colors.mutedForeground} />
+                      </TouchableOpacity>
+                      <TouchableOpacity accessibilityLabel="Delete alarm" onPress={() => Alert.alert("Delete alarm?", "This alarm will be removed.", [{ text: "Cancel", style: "cancel" }, { text: "Delete", style: "destructive", onPress: () => void deleteAlarm(alarm.id) }])}>
+                        <Ionicons name="trash-outline" size={18} color={colors.mutedForeground} />
+                      </TouchableOpacity>
+                      <Switch
+                        value={alarm.enabled}
+                        onValueChange={async (enabled) => {
+                          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                          try {
+                            await setAlarmEnabled(alarm.id, enabled);
+                          } catch {
+                            Alert.alert("Couldn't update alarm", "Check Nap-Less's Alarms & reminders permission, then try again.");
+                          }
+                        }}
+                        trackColor={{ false: colors.border, true: colors.primary + "80" }}
+                        thumbColor={alarm.enabled ? colors.primary : colors.mutedForeground}
+                      />
+                    </View>
+                  </View>
+                  <Text style={[styles.repeatLabel, { color: colors.mutedForeground }]} numberOfLines={1}>{formatRepeat(alarm)}</Text>
                 </View>
-                <Switch
-                  value={config.enabled}
-                  onValueChange={toggleAlarm}
-                  trackColor={{ false: colors.border, true: colors.primary + "80" }}
-                  thumbColor={config.enabled ? colors.primary : colors.mutedForeground}
-                />
-              </View>
-              {challenge && (
-                <View style={[styles.challengeRow, { borderTopColor: colors.border }]}>
-                  <Ionicons name={challenge.icon} size={14} color={colors.mutedForeground} />
-                  <Text style={[styles.challengeLabel, { color: colors.mutedForeground }]}>
-                    {challenge.id === "custom" ? config.customChallenge || challenge.label : challenge.label}
-                  </Text>
-                </View>
-              )}
-              <TouchableOpacity
-                style={[styles.editBtn, { borderColor: colors.border }]}
-                onPress={() => router.push("/configure")}
-              >
-                <Ionicons name="pencil-outline" size={14} color={colors.mutedForeground} />
-                <Text style={[styles.editBtnText, { color: colors.mutedForeground }]}>Edit alarm</Text>
-              </TouchableOpacity>
-            </View>
+              ))}
+            </ScrollView>
           ) : (
             <View style={[styles.emptyAlarm, { borderColor: colors.border }]}>
               <Ionicons name="alarm-outline" size={36} color={colors.mutedForeground} />
-              <Text style={[styles.emptyTitle, { color: colors.foreground }]}>No alarm set</Text>
+              <Text style={[styles.emptyTitle, { color: colors.foreground }]}>No alarms set</Text>
               <Text style={[styles.emptySubtitle, { color: colors.mutedForeground }]}>
-                Set an alarm to get started
+                Add an alarm to get started
               </Text>
             </View>
           )}
@@ -153,10 +168,8 @@ export default function HomeScreen() {
               router.push("/configure");
             }}
           >
-            <Ionicons name={config ? "create-outline" : "add"} size={22} color={colors.primaryForeground} />
-            <Text style={[styles.addBtnText, { color: colors.primaryForeground }]}>
-              {config ? "Change Alarm" : "Set Alarm"}
-            </Text>
+            <Ionicons name="add" size={22} color={colors.primaryForeground} />
+            <Text style={[styles.addBtnText, { color: colors.primaryForeground }]}>Add alarm</Text>
           </TouchableOpacity>
         </View>
 
@@ -190,6 +203,13 @@ const styles = StyleSheet.create({
   clockSeconds: { fontSize: 22, fontFamily: "Inter_400Regular" },
   dateText: { fontSize: 14, fontFamily: "Inter_400Regular", marginTop: 8, letterSpacing: 0.5 },
   alarmSection: { gap: 12 },
+  alarmHeading: { flexDirection: "row", alignItems: "center", gap: 8 },
+  sectionTitle: { fontSize: 12, fontFamily: "Inter_700Bold", letterSpacing: 1.5 },
+  alarmCount: { fontSize: 12, fontFamily: "Inter_500Medium" },
+  alarmList: { maxHeight: 220 },
+  alarmListContent: { gap: 8, paddingBottom: 2 },
+  alarmActions: { flexDirection: "row", alignItems: "center", gap: 12 },
+  repeatLabel: { fontSize: 12, fontFamily: "Inter_400Regular", marginTop: 4 },
   alarmCard: { borderRadius: 18, borderWidth: 1, padding: 16, gap: 0 },
   alarmCardTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   alarmTimeRow: { flexDirection: "row", alignItems: "center", gap: 8 },

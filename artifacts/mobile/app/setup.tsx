@@ -105,7 +105,7 @@ export default function SetupScreen() {
           </View>
           <Text style={[styles.introTitle, { color: colors.foreground }]}>Register Your Face</Text>
           <Text style={[styles.introSubtitle, { color: colors.mutedForeground }]}>
-            Napless uses facial recognition to confirm it's really you dismissing the alarm. Your face never leaves this device.
+            Nap-Less uses facial recognition to confirm it's really you dismissing the alarm. Your face never leaves this device.
           </Text>
           <View style={[styles.infoBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <InfoRow icon="lock-closed-outline" text="Stored encrypted on-device only" colors={colors} />

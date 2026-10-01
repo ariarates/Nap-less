@@ -1,4 +1,4 @@
-# Napless
+# Nap-Less
 
 A smart alarm clock mobile app that makes sure you're truly awake before letting you silence the alarm. It uses facial recognition and activity-based photo challenges — no dismissing with a half-asleep finger tap.
 

@@ -11,7 +11,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Notifications from "expo-notifications";
 import * as Haptics from "expo-haptics";
 import { Audio } from "expo-av";
-import { AppState, Platform } from "react-native";
+import { Alert, AppState, Platform } from "react-native";
 import NativeAlarm from "@/modules/napless-alarm";
 
 Notifications.setNotificationHandler({
@@ -25,6 +25,7 @@ Notifications.setNotificationHandler({
 });
 
 const ALARM_KEY = "napless_alarm_config";
+export type AlarmRepeatMode = "daily" | "weekdays" | "monthly" | "dates";
 
 export const PRESET_RINGTONES = [
   {
@@ -99,10 +100,15 @@ export const CHALLENGES = [
 ];
 
 export interface AlarmConfig {
+  id: string;
   enabled: boolean;
   hour: number;
   minute: number;
   challengeId: string;
+  repeatMode: AlarmRepeatMode;
+  weekdays: number[];
+  monthDays: number[];
+  dates: string[];
   customChallenge?: string;
   notificationId?: string;
   ringtoneUri?: string;
@@ -110,10 +116,14 @@ export interface AlarmConfig {
 }
 
 interface AlarmContextType {
+  alarms: AlarmConfig[];
+  loaded: boolean;
   config: AlarmConfig | null;
   isRinging: boolean;
-  setConfig: (config: AlarmConfig) => Promise<void>;
-  triggerAlarm: () => void;
+  saveAlarm: (config: AlarmConfig) => Promise<void>;
+  setAlarmEnabled: (id: string, enabled: boolean) => Promise<void>;
+  deleteAlarm: (id: string) => Promise<void>;
+  triggerAlarm: (id?: string) => void;
   stopAlarm: () => void;
   getChallenge: () => (typeof CHALLENGES)[0] | undefined;
 }
@@ -129,23 +139,30 @@ async function requestNotificationPermissions() {
 async function scheduleAlarmNotification(config: AlarmConfig): Promise<string | undefined> {
   if (Platform.OS === "web") return undefined;
   try {
-    const now = new Date();
-    const alarm = new Date();
-    alarm.setHours(config.hour, config.minute, 0, 0);
-    if (alarm <= now) alarm.setDate(alarm.getDate() + 1);
+    const alarm = nextAlarmDate(config);
+    if (!alarm) return undefined;
     if (Platform.OS === "android") {
-      await NativeAlarm.scheduleAlarm(alarm.getTime(), config.ringtoneUri ?? PRESET_RINGTONES[0].uri);
+      await requestNotificationPermissions().catch(() => false);
+      await NativeAlarm.scheduleAlarm(
+        config.id,
+        alarm.getTime(),
+        config.ringtoneUri ?? PRESET_RINGTONES[0].uri,
+        config.repeatMode,
+        config.weekdays,
+        config.monthDays,
+        config.dates
+      );
       return undefined;
     }
     const granted = await requestNotificationPermissions();
     if (!granted) return undefined;
     const id = await Notifications.scheduleNotificationAsync({
       content: {
-        title: "Napless Alarm",
+        title: "Nap-Less Alarm",
         body: "Time to wake up! Complete your challenge to dismiss.",
         sound: true,
         priority: Notifications.AndroidNotificationPriority.MAX,
-        data: { type: "alarm" },
+        data: { type: "alarm", alarmId: config.id },
       },
       trigger: {
         type: Notifications.SchedulableTriggerInputTypes.DATE,
@@ -153,20 +170,60 @@ async function scheduleAlarmNotification(config: AlarmConfig): Promise<string | 
       },
     });
     return id;
-  } catch {
+  } catch (error) {
+    if (Platform.OS === "android") throw error;
     return undefined;
   }
 }
 
-async function cancelNotification(id?: string) {
+async function cancelAlarmSchedule(config?: AlarmConfig) {
   if (Platform.OS === "android") {
-    await NativeAlarm.cancelAlarm();
-    return;
+    await NativeAlarm.cancelAlarm(config?.id);
   }
-  if (!id || Platform.OS === "web") return;
+  if (!config?.notificationId || Platform.OS === "web") return;
   try {
-    await Notifications.cancelScheduledNotificationAsync(id);
+    await Notifications.cancelScheduledNotificationAsync(config.notificationId);
   } catch {}
+}
+
+export function dateKey(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+export function alarmOccursOn(config: AlarmConfig, date: Date) {
+  if (config.repeatMode === "weekdays") return config.weekdays.includes(date.getDay());
+  if (config.repeatMode === "monthly") return config.monthDays.includes(date.getDate());
+  if (config.repeatMode === "dates") return config.dates.includes(dateKey(date));
+  return true;
+}
+
+export function nextAlarmDate(config: AlarmConfig, after = new Date()) {
+  const candidate = new Date(after);
+  candidate.setSeconds(0, 0);
+  for (let offset = 0; offset <= 370; offset++) {
+    const day = new Date(candidate);
+    day.setDate(candidate.getDate() + offset);
+    day.setHours(config.hour, config.minute, 0, 0);
+    if (day <= after) continue;
+    if (!alarmOccursOn(config, day)) continue;
+    return day;
+  }
+  return null;
+}
+
+function normalizeAlarm(value: Partial<AlarmConfig>, index: number): AlarmConfig {
+  return {
+    ...value,
+    id: value.id ?? `legacy-${index}`,
+    enabled: Boolean(value.enabled),
+    hour: value.hour ?? 7,
+    minute: value.minute ?? 0,
+    challengeId: value.challengeId ?? CHALLENGES[0].id,
+    repeatMode: value.repeatMode ?? "daily",
+    weekdays: value.weekdays ?? [],
+    monthDays: value.monthDays ?? [],
+    dates: value.dates ?? [],
+  };
 }
 
 let hapticInterval: ReturnType<typeof setInterval> | null = null;
@@ -223,86 +280,178 @@ async function stopAlarmSound() {
 }
 
 export function AlarmProvider({ children }: { children: ReactNode }) {
-  const [config, setConfigState] = useState<AlarmConfig | null>(null);
+  const [alarms, setAlarms] = useState<AlarmConfig[]>([]);
+  const alarmsRef = useRef<AlarmConfig[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [activeAlarmId, setActiveAlarmId] = useState<string | null>(null);
   const [isRinging, setIsRinging] = useState(false);
-  const triggeredRef = useRef(false);
+  const triggeredRef = useRef(new Set<string>());
+
+  const updateAlarms = useCallback(async (next: AlarmConfig[]) => {
+    alarmsRef.current = next;
+    setAlarms(next);
+    await AsyncStorage.setItem(ALARM_KEY, JSON.stringify(next));
+  }, []);
+
+  const config = alarms.find((alarm) => alarm.id === activeAlarmId)
+    ?? alarms.find((alarm) => alarm.enabled)
+    ?? alarms[0]
+    ?? null;
 
   useEffect(() => {
-    AsyncStorage.getItem(ALARM_KEY).then((data) => {
-      if (data) setConfigState(JSON.parse(data));
+    let cancelled = false;
+    const restoreAlarm = async () => {
+      const data = await AsyncStorage.getItem(ALARM_KEY);
+      if (cancelled) return;
+      if (!data) {
+        setLoaded(true);
+        return;
+      }
+      const stored = JSON.parse(data) as Partial<AlarmConfig> | Partial<AlarmConfig>[];
+      const source = Array.isArray(stored) ? stored : [stored];
+      let restored = source.map(normalizeAlarm);
+      if (Platform.OS === "android") await NativeAlarm.cancelAlarm();
+      for (let index = 0; index < restored.length; index++) {
+        const alarm = restored[index];
+        if (alarm.notificationId) await cancelAlarmSchedule(alarm);
+        if (alarm.enabled) {
+          if (!nextAlarmDate(alarm)) {
+            await cancelAlarmSchedule(alarm);
+            restored[index] = { ...alarm, enabled: false, notificationId: undefined };
+            continue;
+          }
+          const notificationId = await scheduleAlarmNotification(alarm);
+          restored[index] = { ...alarm, notificationId };
+        }
+      }
+      if (!cancelled) await updateAlarms(restored);
+      if (!cancelled) setLoaded(true);
+    };
+    void restoreAlarm().catch(() => {
+      Alert.alert(
+        "Alarm couldn't be restored",
+        "Check Nap-Less's Alarms & reminders permission in Android settings, then reopen the app."
+      );
+      setLoaded(true);
     });
-  }, []);
+    return () => { cancelled = true; };
+  }, [updateAlarms]);
 
   useEffect(() => {
     if (Platform.OS !== "android") return;
     const syncRingingState = async () => {
-      if (await NativeAlarm.isRinging()) setIsRinging(true);
+      const alarmId = await NativeAlarm.getRingingAlarmId();
+      setActiveAlarmId(alarmId);
+      setIsRinging(Boolean(alarmId));
     };
     void syncRingingState();
+    const poll = setInterval(() => {
+      if (AppState.currentState === "active") void syncRingingState();
+    }, 1000);
     const sub = AppState.addEventListener("change", (state) => {
       if (state === "active") void syncRingingState();
     });
-    return () => sub.remove();
+    return () => {
+      clearInterval(poll);
+      sub.remove();
+    };
   }, []);
 
   useEffect(() => {
     const sub = Notifications.addNotificationResponseReceivedListener((response) => {
       const data = response.notification.request.content.data as Record<string, unknown>;
-      if (data?.type === "alarm") triggerAlarm();
+      if (data?.type === "alarm") triggerAlarm(String(data.alarmId ?? "") || undefined);
     });
     const received = Notifications.addNotificationReceivedListener((notification) => {
       const data = notification.request.content.data as Record<string, unknown>;
-      if (data?.type === "alarm") triggerAlarm();
+      if (data?.type === "alarm") triggerAlarm(String(data.alarmId ?? "") || undefined);
     });
     return () => { sub.remove(); received.remove(); };
   }, []);
 
   useEffect(() => {
     const interval = setInterval(() => {
-      if (!config?.enabled || isRinging || triggeredRef.current) return;
+      if (Platform.OS === "android" || isRinging) return;
       const now = new Date();
-      if (
-        now.getHours() === config.hour &&
-        now.getMinutes() === config.minute &&
-        now.getSeconds() < 30
-      ) {
-        triggeredRef.current = true;
-        triggerAlarm();
-        setTimeout(() => { triggeredRef.current = false; }, 70000);
-      }
+      alarms.forEach((alarm) => {
+        if (!alarm.enabled || triggeredRef.current.has(alarm.id)) return;
+        if (now.getHours() !== alarm.hour || now.getMinutes() !== alarm.minute || now.getSeconds() >= 30) return;
+        if (!alarmOccursOn(alarm, now)) return;
+        triggeredRef.current.add(alarm.id);
+        triggerAlarm(alarm.id);
+        setTimeout(() => triggeredRef.current.delete(alarm.id), 70_000);
+      });
     }, 5000);
     return () => clearInterval(interval);
-  }, [config, isRinging]);
+  }, [alarms, isRinging]);
 
-  const setConfig = useCallback(async (newConfig: AlarmConfig) => {
-    if (newConfig.notificationId) await cancelNotification(newConfig.notificationId);
-    let notificationId: string | undefined;
-    if (newConfig.enabled) notificationId = await scheduleAlarmNotification(newConfig);
+  const saveAlarm = useCallback(async (newConfig: AlarmConfig) => {
+    if (newConfig.enabled && !nextAlarmDate(newConfig)) {
+      throw new Error("Choose a future time or date for this alarm.");
+    }
+    const current = alarmsRef.current;
+    const previous = current.find((alarm) => alarm.id === newConfig.id);
+    if (previous) await cancelAlarmSchedule(previous);
+    const notificationId = newConfig.enabled ? await scheduleAlarmNotification(newConfig) : undefined;
     const updated = { ...newConfig, notificationId };
-    await AsyncStorage.setItem(ALARM_KEY, JSON.stringify(updated));
-    setConfigState(updated);
-  }, []);
+    const next = previous
+      ? current.map((alarm) => alarm.id === updated.id ? updated : alarm)
+      : [...current, updated];
+    await updateAlarms(next);
+  }, [updateAlarms]);
 
-  const triggerAlarm = useCallback(() => {
+  const setAlarmEnabled = useCallback(async (id: string, enabled: boolean) => {
+    const current = alarmsRef.current;
+    const previous = current.find((alarm) => alarm.id === id);
+    if (!previous) return;
+    if (enabled && !nextAlarmDate(previous)) {
+      throw new Error("Choose a future date for this alarm.");
+    }
+    await cancelAlarmSchedule(previous);
+    const updated: AlarmConfig = { ...previous, enabled, notificationId: undefined };
+    if (enabled) updated.notificationId = await scheduleAlarmNotification(updated);
+    await updateAlarms(current.map((alarm) => alarm.id === id ? updated : alarm));
+  }, [updateAlarms]);
+
+  const deleteAlarm = useCallback(async (id: string) => {
+    const current = alarmsRef.current;
+    const removed = current.find((alarm) => alarm.id === id);
+    if (removed) await cancelAlarmSchedule(removed);
+    await updateAlarms(current.filter((alarm) => alarm.id !== id));
+  }, [updateAlarms]);
+
+  const triggerAlarm = useCallback((id?: string) => {
+    const ringingAlarm = alarmsRef.current.find((alarm) => alarm.id === id)
+      ?? alarmsRef.current.find((alarm) => alarm.enabled)
+      ?? null;
+    setActiveAlarmId(ringingAlarm?.id ?? null);
     setIsRinging(true);
     startHapticAlarm();
-    startAlarmSound(config?.ringtoneUri);
-  }, [config]);
+    startAlarmSound(ringingAlarm?.ringtoneUri);
+  }, []);
 
   const stopAlarm = useCallback(() => {
+    const stopped = alarmsRef.current.find((alarm) => alarm.id === activeAlarmId);
     setIsRinging(false);
+    setActiveAlarmId(null);
     stopHapticAlarm();
     if (Platform.OS === "android") void NativeAlarm.stopAlarm();
     else void stopAlarmSound();
-  }, []);
+    if (stopped?.repeatMode === "dates" && !nextAlarmDate(stopped)) {
+      void setAlarmEnabled(stopped.id, false);
+    }
+  }, [activeAlarmId, setAlarmEnabled]);
 
   const getChallenge = useCallback(() => {
-    if (!config) return CHALLENGES[0];
-    return CHALLENGES.find((c) => c.id === config.challengeId) ?? CHALLENGES[0];
-  }, [config]);
+    const active = alarmsRef.current.find((alarm) => alarm.id === activeAlarmId)
+      ?? alarmsRef.current.find((alarm) => alarm.enabled)
+      ?? alarmsRef.current[0];
+    if (!active) return CHALLENGES[0];
+    return CHALLENGES.find((c) => c.id === active.challengeId) ?? CHALLENGES[0];
+  }, [activeAlarmId]);
 
   return (
-    <AlarmContext.Provider value={{ config, isRinging, setConfig, triggerAlarm, stopAlarm, getChallenge }}>
+    <AlarmContext.Provider value={{ alarms, loaded, config, isRinging, saveAlarm, setAlarmEnabled, deleteAlarm, triggerAlarm, stopAlarm, getChallenge }}>
       {children}
     </AlarmContext.Provider>
   );
