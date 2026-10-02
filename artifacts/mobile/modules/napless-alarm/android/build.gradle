@@ -1,5 +1,13 @@
 apply plugin: "com.android.library"
 apply plugin: "expo-module-gradle-plugin"
 
+android {
+	namespace "expo.modules.naplessalarm"
+	defaultConfig {
+		versionCode 1
+		versionName "1.0.0"
+	}
+}
+
 group = "expo.modules.naplessalarm"
 version = "1.0.0"

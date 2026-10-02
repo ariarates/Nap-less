@@ -23,8 +23,6 @@
     "android": {
       "package": "com.napless.app",
       "versionCode": 1,
-      "compileSdkVersion": 35,
-      "targetSdkVersion": 35,
       "permissions": [
         "CAMERA",
         "VIBRATE",
